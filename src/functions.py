@@ -6,7 +6,7 @@ Contains:
  - Worker logic (worker_task)
  - The adaptive wait logic (debug_retry_step, debug_sleep)
  - Slicer selection logic (select_first_search_result)
- - Overall attempt_run() and StepFailure for adaptive wait testing
+ - Functions attempt_run(), calibrate_wait_times() and StepFailure for adaptive wait testing
 """
 
 # -------------------------------------------------------
@@ -23,7 +23,7 @@ import platform
 import zipfile
 import requests
 import math  # For splitting hospitals among workers
-from concurrent.futures import ProcessPoolExecutor, as_completed  # For parallel workers
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # -------------------------------------------------------
 # Third-Party Imports
@@ -42,7 +42,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 # 1) GLOBAL CONFIG / TOGGLES
 # -------------------------------------------------------
 
-TO_DEBUG = True
+TO_DEBUG = False  # Set to True for calibration/debug mode
 MAX_RETRIES = 10
 
 NUM_WORKERS_DEBUG = 1
@@ -55,9 +55,7 @@ REPORTS_DIR = os.path.join("..", "data", "outputs")
 FAILED_HOSPITALS = os.path.join("..", "data", "outputs", "failed_hospitals.csv")
 
 POWER_BI_URL = (
-    "https://app.powerbi.com/view?"
-    "r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0"
-    "YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
+    "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 )
 
 # Short XPaths for Selenium operations
@@ -67,12 +65,13 @@ FIRST_RESULT_XPATH = "(//span[@class='slicerText'])[1]"
 IFRAME_XPATH = "//iframe[contains(@src, 'powerbi')]"
 
 # Step-specific wait times for each step (in seconds)
+# These values will be calibrated.
 WAIT_TIMES = {
-    "iframe_wait": 1,
-    "dropdown_sleep": 1,
-    "search_sleep": 1,
-    "visual_update_sleep": 1,
-    "webdriver_wait_first_result": 1
+    "iframe_wait": 10,
+    "dropdown_sleep": 10,
+    "search_sleep": 10,
+    "visual_update_sleep": 10,
+    "webdriver_wait_first_result": 10
 }
 
 # -------------------------------------------------------
@@ -256,7 +255,7 @@ def get_webdriver_path():
 def debug_retry_step(step_name, func, *args, **kwargs):
     """
     Try the given step once. If it fails due to a TimeoutException or NoSuchElementException,
-    and TO_DEBUG is True, print the error and immediately raise a StepFailure to trigger a full restart.
+    and TO_DEBUG is True, print the error and immediately raise a StepFailure.
     """
     try:
         return func(*args, **kwargs)
@@ -275,13 +274,16 @@ def debug_sleep(step_name):
 # -------------------------------------------------------
 
 def select_first_search_result(driver, hospital):
+    # Click the dropdown.
     dropdown_el = debug_retry_step("dropdown_sleep", driver.find_element, By.XPATH, DROPDOWN_XPATH)
     dropdown_el.click()
     debug_sleep("dropdown_sleep")
+    # Type hospital name in the search box.
     search_box = debug_retry_step("search_sleep", driver.find_element, By.XPATH, SEARCH_BAR_XPATH)
     search_box.clear()
     search_box.send_keys(hospital)
     debug_sleep("search_sleep")
+    # Click the first result.
     first_result = WebDriverWait(driver, WAIT_TIMES["webdriver_wait_first_result"]).until(
         EC.element_to_be_clickable((By.XPATH, FIRST_RESULT_XPATH))
     )
@@ -294,15 +296,14 @@ def select_first_search_result(driver, hospital):
 
 def worker_task(hospitals_subset, worker_id):
     """
-    Process each hospital in the provided subset:
-      - Switch to the Power BI iframe if available.
-      - Select the hospital via the slicer.
-      - Wait for visual update.
-      - Export the view to PDF.
-    In debug mode, any failure is propagated immediately.
-    In non-debug mode, failures are collected.
+    Process each hospital in the subset:
+      - Navigate to the Power BI report.
+      - Attempt to wait for and switch to an iframe. If not found, print a message and continue.
+      - For each hospital, call select_first_search_result() and export the page as a PDF.
+      - In debug mode, let exceptions propagate.
+      - In non-debug mode, collect failed hospitals.
     """
-    print(f"[Worker {worker_id}] Starting. Handling {len(hospitals_subset)} hospitals.")
+    print(f"[Worker {worker_id}] Starting. Handling {len(hospitals_subset)} hospital(s).")
     failed_list = []
     try:
         driver_path = get_webdriver_path()
@@ -324,6 +325,7 @@ def worker_task(hospitals_subset, worker_id):
     try:
         print(f"[Worker {worker_id}] Navigating to Power BI report: {POWER_BI_URL}")
         driver.get(POWER_BI_URL)
+        # Try to wait for and switch to the iframe; if not found, print a message and continue.
         try:
             WebDriverWait(driver, WAIT_TIMES["iframe_wait"]).until(
                 EC.presence_of_element_located((By.XPATH, IFRAME_XPATH))
@@ -332,12 +334,12 @@ def worker_task(hospitals_subset, worker_id):
             driver.switch_to.frame(iframe)
             print(f"[Worker {worker_id}] Switched to the Power BI iframe.")
         except (TimeoutException, NoSuchElementException) as ex:
-            print(f"[Worker {worker_id}] No iframe found or timed out. Error: {ex}")
+            print("No iframe found. continuing")
+        
         os.makedirs(REPORTS_DIR, exist_ok=True)
         for hospital in hospitals_subset:
-            print(f"[Worker {worker_id}] Selecting hospital: {hospital}")
+            print(f"[Worker {worker_id}] Processing hospital: {hospital}")
             if TO_DEBUG:
-                # In debug mode, let any exception (e.g. from debug_retry_step) propagate.
                 select_first_search_result(driver, hospital)
             else:
                 try:
@@ -361,12 +363,11 @@ def worker_task(hospitals_subset, worker_id):
                 print(f"[Worker {worker_id}] Saved PDF as '{pdf_path}'.")
             except Exception as e:
                 if TO_DEBUG:
-                    # In debug mode, propagate the error immediately.
                     raise e
                 else:
                     print(f"[Worker {worker_id}] Error saving PDF for '{hospital}': {e}")
                     failed_list.append(hospital)
-        print(f"[Worker {worker_id}] Done exporting {len(hospitals_subset)} PDFs.")
+        print(f"[Worker {worker_id}] Done exporting {len(hospitals_subset)} PDF(s).")
     finally:
         driver.quit()
 
@@ -383,13 +384,8 @@ class StepFailure(Exception):
 
 def attempt_run():
     """
-    Attempt the complete process:
-      - Read hospitals from CSV.
-      - In debug mode, automatically process 5 hospitals and force 1 worker.
-      - Otherwise, ask the user for the number of hospitals and workers.
-      - Run the worker task.
-      - In debug mode, any failure will propagate via a StepFailure.
-      - In non-debug mode, if failures occur, append them to FAILED_HOSPITALS and raise StepFailure.
+    Run a test run on one hospital (in debug mode) or a full run (non-debug).
+    In debug mode, we process only the first hospital.
     """
     try:
         with open(HOSPITALS_CSV, newline="") as csvfile:
@@ -406,7 +402,7 @@ def attempt_run():
     
     if TO_DEBUG:
         hospitals = hospitals[:1]
-        print("TO_DEBUG is True; processing 5 hospitals automatically.")
+        print("TO_DEBUG is True; processing one hospital for calibration.")
         num_workers = 1
     else:
         num_hospitals_input = input("How many hospitals do you want to download PDFs for? (Enter number or 'all'): ").strip()
@@ -454,3 +450,33 @@ def attempt_run():
         # In debug mode, if any failure occurs, propagate the exception.
         raise StepFailure("dropdown_sleep")
     return True
+
+# -------------------------------------------------------
+# CALIBRATE WAIT TIMES
+# -------------------------------------------------------
+
+def calibrate_wait_times():
+    """
+    Calibrate each wait time parameter one by one.
+    For each parameter in WAIT_TIMES, try reducing it by 1 second repeatedly
+    (while keeping other parameters fixed) until the test run fails.
+    Then, set that parameter to the minimum value that still yields success.
+    """
+    steps = list(WAIT_TIMES.keys())
+    for step in steps:
+        print(f"\nCalibrating wait time for '{step}' (current value: {WAIT_TIMES[step]} seconds).")
+        original = WAIT_TIMES[step]
+        candidate = original
+        while candidate > 1:
+            WAIT_TIMES[step] = candidate - 1
+            print(f"  Testing with {step} = {WAIT_TIMES[step]} seconds...")
+            try:
+                attempt_run()
+                print(f"    Succeeded with {step} = {WAIT_TIMES[step]} seconds.")
+                candidate = WAIT_TIMES[step]
+            except StepFailure as sf:
+                print(f"    Failed with {step} = {WAIT_TIMES[step]} seconds.")
+                WAIT_TIMES[step] = candidate
+                break
+        print(f"Calibrated '{step}' to {WAIT_TIMES[step]} seconds.\n")
+    print("Calibration complete. Final WAIT_TIMES:", WAIT_TIMES)
