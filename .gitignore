@@ -171,3 +171,6 @@ cython_debug/
 .pypirc
 chromedriver*
 test
+.DS_Store
+.DS_Store
+.DS_Store
