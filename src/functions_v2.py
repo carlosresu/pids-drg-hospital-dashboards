@@ -113,23 +113,34 @@ def ensure_driver_present():
     closest = find_closest_version(all_versions, version_tuple(local_ver))
     return download_chromedriver(closest, driver_platform)
 
-def worker_task(hospitals_subset, output_dir, worker_id, driver_path=None):
+# Update the worker_task to accept run_timestamp
+def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp, driver_path=None):
+    """
+    Worker function to generate PDFs for a subset of hospitals using the same run_timestamp for all files.
+    """
     print(f"[Worker {worker_id}] Starting with {len(hospitals_subset)} hospital(s).")
+
     try:
         if not driver_path:
             driver_path = os.environ.get("WEBDRIVER_PATH") or ensure_driver_present()
+
+        # Set up headless Chrome options
         options = Options()
         options.add_argument("--headless")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--disable-gpu")
+
         driver = webdriver.Chrome(service=Service(driver_path), options=options)
     except Exception as e:
         print(f"[Worker {worker_id}] Failed to start Chrome: {e}")
-        return hospitals_subset
+        return hospitals_subset  # Mark all hospitals in this subset as failed
 
     failed = []
     try:
+        # Open Power BI report
         driver.get(POWER_BI_URL)
+
+        # Try to switch to iframe if available
         try:
             WebDriverWait(driver, WAIT_TIMES["iframe_wait"]).until(
                 EC.presence_of_element_located((By.XPATH, IFRAME_XPATH))
@@ -138,21 +149,32 @@ def worker_task(hospitals_subset, output_dir, worker_id, driver_path=None):
         except Exception:
             print(f"[Worker {worker_id}] No iframe detected.")
 
+        # Loop over hospitals
         for hospital in hospitals_subset:
             try:
                 select_first_search_result(driver, hospital)
                 debug_sleep("visual_update_sleep")
+
+                # Clean hospital name for safe filename
                 safe_name = re.sub(r"[\\/*?:\"<>|]", "_", hospital)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                pdf_name = f"SB_Report_{safe_name}_{timestamp}.pdf"
+
+                # Use the consistent run_timestamp for filenames
+                pdf_name = f"SB_Report_{safe_name}_{run_timestamp}.pdf"
                 pdf_path = os.path.join(output_dir, pdf_name)
+
+                # Generate PDF using Chrome DevTools Protocol
                 pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {"printBackground": True})
+                
+                # Save PDF to disk
                 with open(pdf_path, "wb") as f:
                     f.write(base64.b64decode(pdf_data["data"]))
+                
                 print(f"[Worker {worker_id}] Saved {pdf_name}")
+
             except Exception as e:
                 print(f"[Worker {worker_id}] Failed for {hospital}: {e}")
                 failed.append(hospital)
+
     finally:
         driver.quit()
 
