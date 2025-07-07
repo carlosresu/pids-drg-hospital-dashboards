@@ -1,174 +1,71 @@
-"""
-Contains:
- - Global configuration toggles (TO_DEBUG, WAIT_TIMES, etc.)
- - GCLOUD auth helpers
- - ChromeDriver detection
- - Worker logic (worker_task)
- - The adaptive wait logic (debug_retry_step, debug_sleep)
- - Slicer selection logic (select_first_search_result)
- - Functions attempt_run(), calibrate_wait_times() and StepFailure for adaptive wait testing
-"""
+# ---------------------- src/functions_v2.py ----------------------
 
-# -------------------------------------------------------
-# Standard Library Imports
-# -------------------------------------------------------
 import os
 import re
-import sys
 import time
-import csv
 import base64
 import subprocess
 import platform
 import zipfile
 import requests
-import math  # For splitting hospitals among workers
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-# -------------------------------------------------------
-# Third-Party Imports
-# -------------------------------------------------------
-from google.cloud import bigquery
-from google.api_core.exceptions import GoogleAPIError
+from datetime import datetime
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# -------------------------------------------------------
-# 1) GLOBAL CONFIG / TOGGLES
-# -------------------------------------------------------
-
-TO_DEBUG = False  # Set to True for calibration/debug mode
-MAX_RETRIES = 10
-
-NUM_WORKERS_DEBUG = 1
-NUM_WORKERS_NORMAL = 8
-
-BIGQUERY_QUERY = "SELECT faci_name FROM `drg-viz.00_datasets.hci` ORDER BY faci_name ASC"
-
-HOSPITALS_CSV = os.path.join("..", "data", "inputs", "hospitals.csv")
-REPORTS_DIR = os.path.join("..", "data", "outputs")
-FAILED_HOSPITALS = os.path.join("..", "data", "outputs", "failed_hospitals.csv")
-
-POWER_BI_URL = (
-    "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
-)
-
-# Short XPaths for Selenium operations
+# Global constants
+POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 DROPDOWN_XPATH = "//div[@class='slicer-restatement']"
 SEARCH_BAR_XPATH = "//input[@class='searchInput']"
 FIRST_RESULT_XPATH = "(//span[@class='slicerText'])[1]"
 IFRAME_XPATH = "//iframe[contains(@src, 'powerbi')]"
-
-# Step-specific wait times for each step (in seconds)
-# These values will be calibrated.
 WAIT_TIMES = {
-    "iframe_wait": 10,
-    "dropdown_sleep": 10,
+    "iframe_wait": 5,
+    "dropdown_sleep": 15,
     "search_sleep": 10,
-    "visual_update_sleep": 10,
-    "webdriver_wait_first_result": 10
+    "visual_update_sleep": 15,
+    "webdriver_wait_first_result": 15
 }
-
-# -------------------------------------------------------
-# CHROME FOR TESTING
-# -------------------------------------------------------
-
-CHROME_FOR_TESTING_JSON = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
 DEFAULT_CHROME_PATHS = {
-    "Windows": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    "Windows": r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "Darwin": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "Linux": "/usr/bin/google-chrome",
+    "Linux": "/usr/bin/google-chrome"
 }
+CHROME_FOR_TESTING_JSON = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
 
-# -------------------------------------------------------
-# GCLOUD AUTH HELPERS
-# -------------------------------------------------------
+def debug_sleep(step):
+    time.sleep(WAIT_TIMES[step])
 
-def can_open_browser():
-    sysname = platform.system()
-    if sysname in ("Windows", "Darwin"):
-        return True
-    if sysname == "Linux":
-        return bool(os.environ.get("DISPLAY"))
-    return False
-
-def _no_browser_auth():
-    print("Attempting gcloud authentication with no browser...")
-    proc = subprocess.Popen(
-        ["gcloud", "auth", "application-default", "login", "--no-launch-browser"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE,
-        text=True
-    )
-    link_found = False
-    for line in proc.stdout:
-        if "Go to the following link" in line:
-            link_found = True
-            continue
-        if link_found and line.strip().startswith("http"):
-            link = line.strip()
-            link_found = False
-            print(f"\nOpen this link in your browser:\n{link}\n")
-            input("Press Enter once you've opened the link and logged in... ")
-            verification_code = input("Paste the verification code here: ").strip()
-            proc.stdin.write(verification_code + "\n")
-            proc.stdin.flush()
-            continue
-    proc.wait()
-    if proc.returncode == 0:
-        print("gcloud authentication successful (no-browser).")
-    else:
-        print(f"Error: gcloud authentication failed with return code {proc.returncode}")
-
-def authenticate_gcloud():
-    if can_open_browser():
-        print("Detected local browser. Attempting normal gcloud login...")
-        proc = subprocess.run(
-            ["gcloud", "auth", "application-default", "login"],
-            capture_output=True,
-            text=True
-        )
-        if proc.returncode == 0:
-            print("gcloud authentication successful (local browser).")
-        else:
-            print("gcloud auth failed, fallback to no-browser approach.\n")
-            _no_browser_auth()
-    else:
-        print("No local browser detected, using no-browser approach.")
-        _no_browser_auth()
-
-def is_already_authenticated():
-    try:
-        client = bigquery.Client()
-        client.query("SELECT 1").result()
-        return True
-    except Exception as e:
-        print(f"[DEBUG] Authentication test failed: {e}")
-        return False
-
-# -------------------------------------------------------
-# CHROMEDRIVER DETECTION
-# -------------------------------------------------------
+def select_first_search_result(driver, hospital):
+    driver.find_element(By.XPATH, DROPDOWN_XPATH).click()
+    debug_sleep("dropdown_sleep")
+    box = driver.find_element(By.XPATH, SEARCH_BAR_XPATH)
+    box.clear()
+    box.send_keys(hospital)
+    debug_sleep("search_sleep")
+    WebDriverWait(driver, WAIT_TIMES["webdriver_wait_first_result"]).until(
+        EC.element_to_be_clickable((By.XPATH, FIRST_RESULT_XPATH))
+    ).click()
 
 def get_default_chrome_path():
-    sysname = platform.system()
-    return DEFAULT_CHROME_PATHS.get(sysname)
+    override = os.environ.get("CHROME_PATH")
+    if override and os.path.isfile(override):
+        return override
+    return DEFAULT_CHROME_PATHS.get(platform.system())
 
 def detect_local_chrome_version(chrome_path=None):
     if not chrome_path:
         chrome_path = get_default_chrome_path()
     if not chrome_path or not os.path.isfile(chrome_path):
-        raise FileNotFoundError("Chrome not found at default path.")
-    output = subprocess.check_output([chrome_path, "--version"]).decode("utf-8").strip()
+        raise FileNotFoundError(f"Chrome not found at expected path: {chrome_path}")
+
+    output = subprocess.check_output([chrome_path, "--version"]).decode().strip()
     match = re.search(r"Google Chrome (\d+\.\d+\.\d+\.\d+)", output)
     if not match:
-        raise ValueError(f"Could not parse Chrome version from: {output}")
+        raise ValueError(f"Could not parse Chrome version from output: {output}")
     return match.group(1)
 
 def version_tuple(version_str):
@@ -179,304 +76,106 @@ def get_driver_platform():
     machine = platform.machine().lower()
     if sysname == "Darwin":
         return "mac-arm64" if "arm" in machine else "mac-x64"
-    elif sysname == "Windows":
-        return "win64"
-    elif sysname == "Linux":
-        return "linux64"
-    else:
-        raise NotImplementedError(f"Unsupported OS: {sysname}")
+    return {"Windows": "win64", "Linux": "linux64"}.get(sysname)
 
-def fetch_chrome_for_testing_versions():
-    resp = requests.get(CHROME_FOR_TESTING_JSON)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("versions", [])
+def fetch_chrome_versions():
+    return requests.get(CHROME_FOR_TESTING_JSON).json().get("versions", [])
 
-def find_closest_version_entry(all_versions, local_ver_tuple):
-    closest_entry = None
-    closest_dist = None
-    for entry in all_versions:
-        ver_str = entry["version"]
-        ver_tuple_ = version_tuple(ver_str)
-        dist = sum(abs(a - b) for a, b in zip(ver_tuple_, local_ver_tuple))
-        if closest_entry is None or dist < closest_dist:
-            closest_entry = entry
-            closest_dist = dist
-    return closest_entry
+def find_closest_version(all_versions, local_tuple):
+    return min(all_versions, key=lambda v: sum(abs(a - b) for a, b in zip(version_tuple(v["version"]), local_tuple)))
 
-def download_and_unzip_chromedriver(entry, driver_platform):
-    driver_info = None
+def download_chromedriver(entry, platform_tag):
     for d in entry["downloads"].get("chromedriver", []):
-        if d["platform"] == driver_platform:
-            driver_info = d
-            break
-    if not driver_info:
-        raise RuntimeError("No matching ChromeDriver found.")
-    extracted_dir_name = f"chromedriver-{driver_platform}"
-    driver_path = os.path.join(extracted_dir_name, "chromedriver")
-    if os.path.isdir(extracted_dir_name):
-        print(f"Directory '{extracted_dir_name}' already exists. Skipping download.")
-    else:
-        url = driver_info["url"]
-        zip_filename = f"chromedriver_{driver_platform}.zip"
-        print(f"Downloading ChromeDriver from: {url}")
-        with open(zip_filename, "wb") as f:
-            f.write(requests.get(url).content)
-        with zipfile.ZipFile(zip_filename, "r") as zf:
-            zf.extractall(".")
-        print(f"Extracted '{zip_filename}'.")
-        try:
-            os.remove(zip_filename)
-        except OSError as e:
-            print(f"Warning: Could not remove '{zip_filename}': {e}")
-    if not os.path.isfile(driver_path):
-        raise RuntimeError(f"chromedriver not found at '{driver_path}'.")
-    os.chmod(driver_path, 0o755)
-    print(f"ChromeDriver ready at: {driver_path}")
-    return driver_path
+        if d["platform"] == platform_tag:
+            url = d["url"]
+            zip_file = f"chromedriver_{platform_tag}.zip"
+            print(f"Downloading ChromeDriver from {url}")
+            with open(zip_file, "wb") as f:
+                f.write(requests.get(url).content)
+            with zipfile.ZipFile(zip_file, "r") as z:
+                z.extractall(".")
+            os.remove(zip_file)
+            path = os.path.join(f"chromedriver-{platform_tag}", "chromedriver")
+            os.chmod(path, 0o755)
+            return path
+    raise RuntimeError("No matching ChromeDriver found.")
 
-def get_webdriver_path():
-    local_ver_str = detect_local_chrome_version()
-    local_tuple = version_tuple(local_ver_str)
-    print(f"Local Chrome version: {local_ver_str}")
+def ensure_driver_present():
+    """Checks if driver already downloaded, if not, downloads it."""
     driver_platform = get_driver_platform()
-    print(f"Detected driver platform: {driver_platform}")
-    all_versions = fetch_chrome_for_testing_versions()
-    if not all_versions:
-        sys.exit("No versions found in Chrome for Testing feed.")
-    closest_entry = find_closest_version_entry(all_versions, local_tuple)
-    print(f"Closest known-good version to {local_ver_str} is {closest_entry['version']}")
-    return download_and_unzip_chromedriver(closest_entry, driver_platform)
+    extracted_dir = f"chromedriver-{driver_platform}"
+    driver_path = os.path.join(extracted_dir, "chromedriver")
+    if os.path.isfile(driver_path):
+        return driver_path
+    print("ChromeDriver not found locally. Downloading...")
+    local_ver = detect_local_chrome_version()
+    all_versions = fetch_chrome_versions()
+    closest = find_closest_version(all_versions, version_tuple(local_ver))
+    return download_chromedriver(closest, driver_platform)
 
-# -------------------------------------------------------
-# ADAPTIVE WAIT LOGIC
-# -------------------------------------------------------
+# Update the worker_task to accept run_timestamp
+def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp, driver_path=None):
+    """
+    Worker function to generate PDFs for a subset of hospitals using the same run_timestamp for all files.
+    """
+    print(f"[Worker {worker_id}] Starting with {len(hospitals_subset)} hospital(s).")
 
-def debug_retry_step(step_name, func, *args, **kwargs):
-    """
-    Try the given step once. If it fails due to a TimeoutException or NoSuchElementException,
-    and TO_DEBUG is True, print the error and immediately raise a StepFailure.
-    """
     try:
-        return func(*args, **kwargs)
-    except (TimeoutException, NoSuchElementException) as ex:
-        if TO_DEBUG:
-            print(f"[DEBUG] Step '{step_name}' failed with error: {ex}")
-            raise StepFailure(step_name) from ex
-        else:
-            raise
+        if not driver_path:
+            driver_path = os.environ.get("WEBDRIVER_PATH") or ensure_driver_present()
 
-def debug_sleep(step_name):
-    time.sleep(WAIT_TIMES[step_name])
+        # Set up headless Chrome options
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-gpu")
 
-# -------------------------------------------------------
-# SLICER SELECTION
-# -------------------------------------------------------
-
-def select_first_search_result(driver, hospital):
-    # Click the dropdown.
-    dropdown_el = debug_retry_step("dropdown_sleep", driver.find_element, By.XPATH, DROPDOWN_XPATH)
-    dropdown_el.click()
-    debug_sleep("dropdown_sleep")
-    # Type hospital name in the search box.
-    search_box = debug_retry_step("search_sleep", driver.find_element, By.XPATH, SEARCH_BAR_XPATH)
-    search_box.clear()
-    search_box.send_keys(hospital)
-    debug_sleep("search_sleep")
-    # Click the first result.
-    first_result = WebDriverWait(driver, WAIT_TIMES["webdriver_wait_first_result"]).until(
-        EC.element_to_be_clickable((By.XPATH, FIRST_RESULT_XPATH))
-    )
-    first_result.click()
-    print(f"Clicked first search result for '{hospital}'.")
-
-# -------------------------------------------------------
-# WORKER TASK
-# -------------------------------------------------------
-
-def worker_task(hospitals_subset, worker_id):
-    """
-    Process each hospital in the subset:
-      - Navigate to the Power BI report.
-      - Attempt to wait for and switch to an iframe. If not found, print a message and continue.
-      - For each hospital, call select_first_search_result() and export the page as a PDF.
-      - In debug mode, let exceptions propagate.
-      - In non-debug mode, collect failed hospitals.
-    """
-    print(f"[Worker {worker_id}] Starting. Handling {len(hospitals_subset)} hospital(s).")
-    failed_list = []
-    try:
-        driver_path = get_webdriver_path()
+        driver = webdriver.Chrome(service=Service(driver_path), options=options)
     except Exception as e:
-        print(f"[Worker {worker_id}] Error obtaining ChromeDriver path: {e}")
-        return hospitals_subset
+        print(f"[Worker {worker_id}] Failed to start Chrome: {e}")
+        return hospitals_subset  # Mark all hospitals in this subset as failed
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-gpu")
-    service = Service(driver_path)
+    failed = []
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-    except Exception as e:
-        print(f"[Worker {worker_id}] Error launching Chrome: {e}")
-        return hospitals_subset
-
-    try:
-        print(f"[Worker {worker_id}] Navigating to Power BI report: {POWER_BI_URL}")
+        # Open Power BI report
         driver.get(POWER_BI_URL)
-        # Try to wait for and switch to the iframe; if not found, print a message and continue.
+
+        # Try to switch to iframe if available
         try:
             WebDriverWait(driver, WAIT_TIMES["iframe_wait"]).until(
                 EC.presence_of_element_located((By.XPATH, IFRAME_XPATH))
             )
-            iframe = driver.find_element(By.XPATH, IFRAME_XPATH)
-            driver.switch_to.frame(iframe)
-            print(f"[Worker {worker_id}] Switched to the Power BI iframe.")
-        except (TimeoutException, NoSuchElementException) as ex:
-            print("No iframe found. continuing")
-        
-        os.makedirs(REPORTS_DIR, exist_ok=True)
-        for hospital in hospitals_subset:
-            print(f"[Worker {worker_id}] Processing hospital: {hospital}")
-            if TO_DEBUG:
-                select_first_search_result(driver, hospital)
-            else:
-                try:
-                    select_first_search_result(driver, hospital)
-                except Exception as ex:
-                    print(f"[Worker {worker_id}] Warning: '{hospital}' error. Skipping. {ex}")
-                    failed_list.append(hospital)
-                    try:
-                        driver.find_element(By.TAG_NAME, "body").click()
-                    except Exception:
-                        pass
-                    continue
+            driver.switch_to.frame(driver.find_element(By.XPATH, IFRAME_XPATH))
+        except Exception:
+            print(f"[Worker {worker_id}] No iframe detected.")
 
-            debug_sleep("visual_update_sleep")
+        # Loop over hospitals
+        for hospital in hospitals_subset:
             try:
-                safe_name = re.sub(r'[\\/*?:"<>|]', "_", hospital)
+                select_first_search_result(driver, hospital)
+                debug_sleep("visual_update_sleep")
+
+                # Clean hospital name for safe filename
+                safe_name = re.sub(r"[\\/*?:\"<>|]", "_", hospital)
+
+                # Use the consistent run_timestamp for filenames
+                pdf_name = f"SB_Report_{safe_name}_{run_timestamp}.pdf"
+                pdf_path = os.path.join(output_dir, pdf_name)
+
+                # Generate PDF using Chrome DevTools Protocol
                 pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {"printBackground": True})
-                pdf_path = os.path.join(REPORTS_DIR, f"{safe_name}.pdf")
-                with open(pdf_path, "wb") as pdf_file:
-                    pdf_file.write(base64.b64decode(pdf_data['data']))
-                print(f"[Worker {worker_id}] Saved PDF as '{pdf_path}'.")
+                
+                # Save PDF to disk
+                with open(pdf_path, "wb") as f:
+                    f.write(base64.b64decode(pdf_data["data"]))
+                
+                print(f"[Worker {worker_id}] Saved {pdf_name}")
+
             except Exception as e:
-                if TO_DEBUG:
-                    raise e
-                else:
-                    print(f"[Worker {worker_id}] Error saving PDF for '{hospital}': {e}")
-                    failed_list.append(hospital)
-        print(f"[Worker {worker_id}] Done exporting {len(hospitals_subset)} PDF(s).")
+                print(f"[Worker {worker_id}] Failed for {hospital}: {e}")
+                failed.append(hospital)
+
     finally:
         driver.quit()
 
-    return failed_list
-
-# -------------------------------------------------------
-# ATTEMPT RUN FUNCTION AND STEP FAILURE EXCEPTION
-# -------------------------------------------------------
-
-class StepFailure(Exception):
-    def __init__(self, step_name):
-        self.step_name = step_name
-        super().__init__(f"Step failure at {step_name}")
-
-def attempt_run():
-    """
-    Run a test run on one hospital (in debug mode) or a full run (non-debug).
-    In debug mode, we process only the first hospital.
-    """
-    try:
-        with open(HOSPITALS_CSV, newline="") as csvfile:
-            reader = csv.reader(csvfile)
-            hospitals = [row[0] for row in reader if row]
-        print(f"Loaded {len(hospitals)} entries from {HOSPITALS_CSV}.")
-    except Exception as e:
-        print(f"Error reading hospitals CSV: {e}")
-        raise StepFailure("read_csv")
-    
-    if hospitals and hospitals[0].strip().lower() == "facility_name":
-        hospitals = hospitals[1:]
-        print("Skipped header row in CSV.")
-    
-    if TO_DEBUG:
-        hospitals = hospitals[:1]
-        print("TO_DEBUG is True; processing one hospital for calibration.")
-        num_workers = 1
-    else:
-        num_hospitals_input = input("How many hospitals do you want to download PDFs for? (Enter number or 'all'): ").strip()
-        if num_hospitals_input.lower() == "all":
-            num_hospitals = len(hospitals)
-        else:
-            try:
-                num_hospitals = int(num_hospitals_input)
-            except ValueError:
-                print("Invalid input. Using all hospitals.")
-                num_hospitals = len(hospitals)
-        hospitals = hospitals[:num_hospitals]
-        print(f"Processing {len(hospitals)} hospitals.")
-        num_workers_input = input("Enter number of workers to use: ").strip()
-        try:
-            num_workers = int(num_workers_input)
-        except ValueError:
-            print("Invalid input. Using default number of workers.")
-            num_workers = NUM_WORKERS_NORMAL
-
-    if num_workers == 1:
-        failed = worker_task(hospitals, worker_id=1)
-    else:
-        split_size = math.ceil(len(hospitals) / num_workers)
-        hospitals_subsets = [hospitals[i:i+split_size] for i in range(0, len(hospitals), split_size)]
-        failed = []
-        print(f"Using {num_workers} workers to process {len(hospitals)} hospitals.")
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(worker_task, subset, i+1): subset for i, subset in enumerate(hospitals_subsets)}
-            for future in as_completed(futures):
-                failed.extend(future.result())
-    
-    if failed and not TO_DEBUG:
-        print(f"Failed hospitals: {failed}")
-        try:
-            with open(FAILED_HOSPITALS, "a", newline="") as csvfile:
-                writer = csv.writer(csvfile)
-                for hospital in failed:
-                    writer.writerow([hospital])
-            print(f"Appended failed hospitals to {FAILED_HOSPITALS}.")
-        except Exception as e:
-            print(f"Error writing failed hospitals CSV: {e}")
-        raise StepFailure("worker_task")
-    elif failed and TO_DEBUG:
-        # In debug mode, if any failure occurs, propagate the exception.
-        raise StepFailure("dropdown_sleep")
-    return True
-
-# -------------------------------------------------------
-# CALIBRATE WAIT TIMES
-# -------------------------------------------------------
-
-def calibrate_wait_times():
-    """
-    Calibrate each wait time parameter one by one.
-    For each parameter in WAIT_TIMES, try reducing it by 1 second repeatedly
-    (while keeping other parameters fixed) until the test run fails.
-    Then, set that parameter to the minimum value that still yields success.
-    """
-    steps = list(WAIT_TIMES.keys())
-    for step in steps:
-        print(f"\nCalibrating wait time for '{step}' (current value: {WAIT_TIMES[step]} seconds).")
-        original = WAIT_TIMES[step]
-        candidate = original
-        while candidate > 1:
-            WAIT_TIMES[step] = candidate - 1
-            print(f"  Testing with {step} = {WAIT_TIMES[step]} seconds...")
-            try:
-                attempt_run()
-                print(f"    Succeeded with {step} = {WAIT_TIMES[step]} seconds.")
-                candidate = WAIT_TIMES[step]
-            except StepFailure as sf:
-                print(f"    Failed with {step} = {WAIT_TIMES[step]} seconds.")
-                WAIT_TIMES[step] = candidate
-                break
-        print(f"Calibrated '{step}' to {WAIT_TIMES[step]} seconds.\n")
-    print("Calibration complete. Final WAIT_TIMES:", WAIT_TIMES)
+    return failed
