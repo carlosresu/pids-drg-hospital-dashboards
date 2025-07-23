@@ -13,10 +13,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # ---------------- Configuration ----------------
 POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 WAIT_TIMES = {
-    "iframe_wait": 1,
-    "dropdown_sleep": 1,
-    "search_sleep": 1,
-    "visual_update_sleep": 1
+    "iframe_wait": 3,
+    "dropdown_sleep": 3,
+    "search_sleep": 3,
+    "visual_update_sleep": 3
 }
 DROPDOWN_SELECTOR = ".slicer-restatement"
 SEARCH_BAR_SELECTOR = "input.searchInput"
@@ -84,6 +84,8 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
 
     found = False
     count = dropdown_items.count()
+
+    # Pass 1: normalized comparison
     for i in range(count):
         item = dropdown_items.nth(i)
         try:
@@ -94,6 +96,20 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
                 break
         except Exception:
             continue
+
+    # Pass 2: exact match if not found
+    if not found:
+        for i in range(count):
+            item = dropdown_items.nth(i)
+            try:
+                text = item.locator("span.slicerText").inner_text().strip()
+                if text == hospital:
+                    item.click()
+                    found = True
+                    break
+            except Exception:
+                continue
+
 
     if not found:
         if ENABLE_SCREENSHOT:

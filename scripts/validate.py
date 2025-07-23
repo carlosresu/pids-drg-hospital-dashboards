@@ -4,7 +4,7 @@ import re
 
 # --- Config ---
 HOSPITALS_CSV = r"C:\Users\resur\pids-drg-hospital-dashboards\data\inputs\hospitals.csv"
-OUTPUT_DIR = r"C:\Users\resur\pids-drg-hospital-dashboards\data\outputs\SB_Report_20250723_143700"
+OUTPUT_DIR = r"C:\Users\resur\pids-drg-hospital-dashboards\data\outputs\SB_Report_20250723_153139"
 MISSING_CSV = os.path.join(OUTPUT_DIR, "missing_pdfs.csv")
 
 # --- Normalization Function (same as in PDF script) ---
