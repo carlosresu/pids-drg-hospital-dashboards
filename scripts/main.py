@@ -7,7 +7,6 @@ import math
 import subprocess
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from playwright.sync_api import sync_playwright
 
 # ---------------- Configuration ----------------
 POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
@@ -26,6 +25,21 @@ TO_DEBUG = False
 ENABLE_SCREENSHOT = False
 NUM_WORKERS = 16
 # ------------------------------------------------
+
+def ensure_dependencies():
+    try:
+        import playwright
+    except ImportError:
+        print("Installing Playwright via pip...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+
+    # Only install browser binaries once per machine
+    lockfile = os.path.join(os.path.expanduser("~"), ".playwright_installed")
+    if not os.path.exists(lockfile):
+        print("Installing Playwright browser binaries...")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        with open(lockfile, "w") as f:
+            f.write("installed")
 
 def debug_sleep(name):
     time.sleep(WAIT_TIMES[name])
@@ -68,6 +82,8 @@ def select_first_search_result(frame, hospital):
         print(f"Confirmed selection: {selected}")
 
 def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp):
+    from playwright.sync_api import sync_playwright
+
     print(f"[Worker {worker_id}] Starting with {len(hospitals_subset)} hospital(s).")
     failed = []
 
@@ -122,10 +138,11 @@ def run_worker(args):
 
 # ---------------- Main Entry Point ----------------
 if __name__ == "__main__":
-    try:
-        subprocess.run(["playwright", "install"], check=True)
-    except Exception as e:
-        sys.exit(f"Playwright installation failed: {e}")
+    import multiprocessing
+    multiprocessing.set_start_method("spawn", force=True)
+
+    ensure_dependencies()
+    from playwright.sync_api import sync_playwright
 
     # Load hospitals
     try:
