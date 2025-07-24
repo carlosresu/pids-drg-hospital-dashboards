@@ -22,7 +22,7 @@ DROPDOWN_SELECTOR = ".slicer-restatement"
 SEARCH_BAR_SELECTOR = "input.searchInput"
 SLICER_ITEM_SELECTOR = "div.slicerItemContainer"
 IFRAME_SELECTOR = "iframe[src*='powerbi']"
-HOSPITALS_CSV = os.path.join("data", "inputs", "hospitals.csv")
+HOSPITALS_CSV = os.path.join("data", "inputs", "hospitals_new.csv")
 TO_DEBUG = False
 ENABLE_SCREENSHOT = False
 NUM_WORKERS = 16
@@ -85,7 +85,6 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     found = False
     count = dropdown_items.count()
 
-    # Pass 1: normalized comparison
     for i in range(count):
         item = dropdown_items.nth(i)
         try:
@@ -97,7 +96,6 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
         except Exception:
             continue
 
-    # Pass 2: exact match if not found
     if not found:
         for i in range(count):
             item = dropdown_items.nth(i)
@@ -109,7 +107,6 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
                     break
             except Exception:
                 continue
-
 
     if not found:
         if ENABLE_SCREENSHOT:
@@ -192,11 +189,10 @@ if __name__ == "__main__":
 
     try:
         with open(HOSPITALS_CSV, newline="", encoding="utf-8") as f:
-            hospitals = [row[0] for row in csv.reader(f) if row]
-        if hospitals and normalize_text(hospitals[0]) == "facility_name":
-            hospitals = hospitals[1:]
+            reader = csv.DictReader(f)
+            hospitals = [normalize_text(row["faci_name"]) for row in reader if row.get("faci_name")]
     except Exception as e:
-        sys.exit(f"Error reading hospitals CSV: {e}")
+        sys.exit(f"Error reading hospitals_new.csv: {e}")
 
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join("data", "outputs", f"SB_Report_{run_timestamp}")
