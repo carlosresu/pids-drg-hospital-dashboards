@@ -11,7 +11,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ---------------- Configuration ----------------
-POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNDlmNjliNTUtOTEwOS00NTFhLWIwMGQtNzk1Y2VlYWIwNjBjIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
+POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiOTI0MWRlZDQtZTQ4OS00NjQyLWI1NTEtN2Y5NDZkOTc1ZGEzIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 WAIT_TIMES = {
     "iframe_wait": 3,
     "dropdown_sleep": 3,
@@ -85,11 +85,12 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     found = False
     count = dropdown_items.count()
 
+
     for i in range(count):
         item = dropdown_items.nth(i)
         try:
             text = item.locator("span.slicerText").inner_text().strip()
-            if normalize_text(text) == normalize_text(hospital):
+            if text == hospital:
                 item.click()
                 found = True
                 break
@@ -101,7 +102,7 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
             item = dropdown_items.nth(i)
             try:
                 text = item.locator("span.slicerText").inner_text().strip()
-                if text == hospital:
+                if normalize_text(text) == normalize_text(hospital):
                     item.click()
                     found = True
                     break
