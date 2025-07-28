@@ -59,8 +59,14 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
         raise Exception("Failed to open dropdown.")
 
     try:
-        search_box = frame.locator(SEARCH_BAR_SELECTOR)
-        search_box.wait_for(state="visible", timeout=10000)
+        dropdown_items = frame.locator(SLICER_ITEM_SELECTOR)
+        # Wait until at least one item is found and is visible
+        frame.wait_for_selector(f"{SLICER_ITEM_SELECTOR} span.slicerText", state="visible", timeout=10000)
+
+        count = dropdown_items.count()
+        if count == 0:
+            raise Exception("Dropdown items failed to load.")
+
     except Exception:
         raise Exception("Search bar not visible.")
 
@@ -85,24 +91,24 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     found = False
     count = dropdown_items.count()
 
-
     for i in range(count):
         item = dropdown_items.nth(i)
         try:
             text = item.locator("span.slicerText").inner_text().strip()
-            if text == hospital:
+            if normalize_text(text) == normalize_text(hospital):
                 item.click()
                 found = True
                 break
         except Exception:
             continue
+    
 
     if not found:
         for i in range(count):
             item = dropdown_items.nth(i)
             try:
                 text = item.locator("span.slicerText").inner_text().strip()
-                if normalize_text(text) == normalize_text(hospital):
+                if text == hospital:
                     item.click()
                     found = True
                     break
