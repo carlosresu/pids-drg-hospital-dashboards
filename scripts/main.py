@@ -22,7 +22,7 @@ DROPDOWN_SELECTOR = ".slicer-restatement"
 SEARCH_BAR_SELECTOR = "input.searchInput"
 SLICER_ITEM_SELECTOR = "div.slicerItemContainer"
 IFRAME_SELECTOR = "iframe[src*='powerbi']"
-HOSPITALS_CSV = os.path.join("data", "inputs", "hospitals_new.csv")
+HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
 TO_DEBUG = False
 ENABLE_SCREENSHOT = False
 NUM_WORKERS = 16
@@ -190,38 +190,49 @@ def run_worker(args):
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.set_start_method("spawn", force=True)
-
     ensure_dependencies()
 
-    try:
-        with open(HOSPITALS_CSV, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            hospitals = [normalize_text(row["faci_name"]) for row in reader if row.get("faci_name")]
-    except Exception as e:
-        sys.exit(f"Error reading hospitals_new.csv: {e}")
+    base_input_csv = os.path.join("data", "inputs", "hospitals_new.csv")
+    failed_input_csv = os.path.join("data", "inputs", "failed_hospitals.csv")
 
-    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("data", "outputs", f"SB_Report_{run_timestamp}")
-    os.makedirs(output_dir, exist_ok=True)
+    attempt = 1
+    while True:
+        print(f"\n=== Attempt {attempt} ===")
 
-    try:
-        num = input("How many hospitals? ('all' or number): ").strip()
-        hospitals_to_process = hospitals if num.lower() == "all" else hospitals[:int(num)]
-    except ValueError:
-        hospitals_to_process = hospitals
+        input_csv = base_input_csv if attempt == 1 else failed_input_csv
 
-    split_size = math.ceil(len(hospitals_to_process) / NUM_WORKERS)
-    subsets = [hospitals_to_process[i:i + split_size] for i in range(0, len(hospitals_to_process), split_size)]
-    args_list = [(subset, output_dir, i + 1, run_timestamp) for i, subset in enumerate(subsets)]
+        try:
+            with open(input_csv, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                hospitals = [normalize_text(row["faci_name"]) for row in reader if row.get("faci_name")]
+        except Exception as e:
+            sys.exit(f"Error reading {input_csv}: {e}")
 
-    failed = []
-    with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        futures = [executor.submit(run_worker, args) for args in args_list]
-        for future in as_completed(futures):
-            failed.extend(future.result())
+        if not hospitals:
+            print("No hospitals left to process.")
+            break
 
-    if failed:
-        fail_csv = os.path.join(output_dir, "failed_hospitals.csv")
-        with open(fail_csv, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerows([[h] for h in failed])
-        print(f"Failed hospitals saved to {fail_csv}")
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("data", "outputs", f"SB_Report_{run_timestamp}_attempt{attempt}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        split_size = math.ceil(len(hospitals) / NUM_WORKERS)
+        subsets = [hospitals[i:i + split_size] for i in range(0, len(hospitals), split_size)]
+        args_list = [(subset, output_dir, i + 1, run_timestamp) for i, subset in enumerate(subsets)]
+
+        failed = []
+        with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = [executor.submit(run_worker, args) for args in args_list]
+            for future in as_completed(futures):
+                failed.extend(future.result())
+
+        if failed:
+            with open(failed_input_csv, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["faci_name"])
+                writer.writerows([[h] for h in failed])
+            print(f"{len(failed)} hospitals failed. Retrying with new list...")
+            attempt += 1
+        else:
+            print("✅ All hospitals processed successfully.")
+            break
