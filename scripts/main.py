@@ -28,8 +28,6 @@ ENABLE_SCREENSHOT = False
 NUM_WORKERS = 16
 # ------------------------------------------------
 
-# (same imports and config as before)
-
 def ensure_dependencies():
     try:
         import playwright
@@ -196,6 +194,9 @@ if __name__ == "__main__":
     failed_input_csv = os.path.join("data", "inputs", "failed_hospitals.csv")
 
     attempt = 1
+    run_timestamp = None
+    output_dir = None
+
     while True:
         print(f"\n=== Attempt {attempt} ===")
 
@@ -212,9 +213,10 @@ if __name__ == "__main__":
             print("No hospitals left to process.")
             break
 
-        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join("data", "outputs", f"SB_Report_{run_timestamp}_attempt{attempt}")
-        os.makedirs(output_dir, exist_ok=True)
+        if attempt == 1:
+            run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = os.path.join("data", "outputs", f"SB_Report_{run_timestamp}")
+            os.makedirs(output_dir, exist_ok=True)
 
         split_size = math.ceil(len(hospitals) / NUM_WORKERS)
         subsets = [hospitals[i:i + split_size] for i in range(0, len(hospitals), split_size)]
