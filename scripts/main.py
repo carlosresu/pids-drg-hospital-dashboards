@@ -28,6 +28,8 @@ ENABLE_SCREENSHOT = False
 NUM_WORKERS = 16
 # ------------------------------------------------
 
+# (same imports and config as before)
+
 def ensure_dependencies():
     try:
         import playwright
@@ -52,41 +54,36 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     if TO_DEBUG:
         print(f"Selecting: {hospital}")
 
-    try:
-        frame.click(DROPDOWN_SELECTOR, timeout=15000)
-        debug_sleep("dropdown_sleep")
-    except Exception:
-        raise Exception("Failed to open dropdown.")
+    for attempt in range(2):  # Retry once if dropdown fails
+        try:
+            frame.click(DROPDOWN_SELECTOR, timeout=15000)
+            frame.wait_for_selector(SEARCH_BAR_SELECTOR, state="visible", timeout=10000)
+            debug_sleep("dropdown_sleep")
+            break
+        except Exception as e:
+            if attempt == 1:
+                raise Exception(f"Failed to open dropdown: {e}")
+            debug_sleep("dropdown_sleep")
 
     try:
-        dropdown_items = frame.locator(SLICER_ITEM_SELECTOR)
-        # Wait until at least one item is found and is visible
-        frame.wait_for_selector(f"{SLICER_ITEM_SELECTOR} span.slicerText", state="visible", timeout=10000)
-
-        count = dropdown_items.count()
-        if count == 0:
-            raise Exception("Dropdown items failed to load.")
-
-    except Exception:
-        raise Exception("Search bar not visible.")
-
-    try:
-        search_box.fill(hospital)
-        search_box.press("Enter")
-    except Exception:
-        if TO_DEBUG:
-            print("[Retry] Refocusing dropdown and retrying search box fill...")
-        frame.click(DROPDOWN_SELECTOR, timeout=5000)
-        debug_sleep("dropdown_sleep")
         search_box = frame.locator(SEARCH_BAR_SELECTOR)
-        search_box.wait_for(state="visible", timeout=5000)
+        search_box.wait_for(state="visible", timeout=10000)
         search_box.fill(hospital)
         search_box.press("Enter")
+    except Exception as e:
+        raise Exception(f"Search input error: {e}")
 
     debug_sleep("search_sleep")
 
     dropdown_items = frame.locator(SLICER_ITEM_SELECTOR)
-    dropdown_items.first.wait_for(state="visible", timeout=10000)
+
+    try:
+        frame.wait_for_selector(f"{SLICER_ITEM_SELECTOR} span.slicerText", state="visible", timeout=10000)
+        count = dropdown_items.count()
+        if count == 0:
+            raise Exception("Dropdown items failed to load.")
+    except Exception as e:
+        raise Exception(f"Dropdown wait error: {e}")
 
     found = False
     count = dropdown_items.count()
@@ -101,7 +98,6 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
                 break
         except Exception:
             continue
-    
 
     if not found:
         for i in range(count):
@@ -129,11 +125,14 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     except:
         pass
 
-    selected = frame.locator(DROPDOWN_SELECTOR).inner_text().strip()
-    if normalize_text(selected) != normalize_text(hospital):
-        raise Exception(f"Dropdown shows '{selected}', expected '{hospital}'")
-    elif TO_DEBUG:
-        print(f"Confirmed selection: {selected}")
+    try:
+        selected = frame.locator(DROPDOWN_SELECTOR).inner_text().strip()
+        if normalize_text(selected) != normalize_text(hospital):
+            raise Exception(f"Dropdown shows '{selected}', expected '{hospital}'")
+        elif TO_DEBUG:
+            print(f"Confirmed selection: {selected}")
+    except Exception as e:
+        raise Exception(f"Post-selection verification error: {e}")
 
 def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp):
     from playwright.sync_api import sync_playwright
