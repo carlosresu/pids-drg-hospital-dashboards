@@ -12,12 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ---------------- Configuration ----------------
 POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiOTI0MWRlZDQtZTQ4OS00NjQyLWI1NTEtN2Y5NDZkOTc1ZGEzIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
-POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiOTI0MWRlZDQtZTQ4OS00NjQyLWI1NTEtN2Y5NDZkOTc1ZGEzIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 WAIT_TIMES = {
-    "iframe_wait": 3,
-    "dropdown_sleep": 3,
-    "search_sleep": 3,
-    "visual_update_sleep": 3
     "iframe_wait": 3,
     "dropdown_sleep": 3,
     "search_sleep": 3,
@@ -28,10 +23,9 @@ SEARCH_BAR_SELECTOR = "input.searchInput"
 SLICER_ITEM_SELECTOR = "div.slicerItemContainer"
 IFRAME_SELECTOR = "iframe[src*='powerbi']"
 HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
-HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
 TO_DEBUG = False
 ENABLE_SCREENSHOT = False
-NUM_WORKERS = 4
+NUM_WORKERS = 16
 # ------------------------------------------------
 
 def ensure_dependencies():
@@ -72,9 +66,16 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     if TO_DEBUG:
         print(f"Selecting: {hospital}")
 
-    # Open the dropdown
-    frame.click(DROPDOWN_SELECTOR, timeout=15000)
-    debug_sleep("dropdown_sleep")
+    for attempt in range(2):
+        try:
+            frame.click(DROPDOWN_SELECTOR, timeout=15000)
+            frame.wait_for_selector(SEARCH_BAR_SELECTOR, state="visible", timeout=10000)
+            debug_sleep("dropdown_sleep")
+            break
+        except Exception as e:
+            if attempt == 1:
+                raise Exception(f"Failed to open dropdown: {e}")
+            debug_sleep("dropdown_sleep")
 
     try:
         search_box = frame.locator(SEARCH_BAR_SELECTOR)
@@ -85,15 +86,47 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
         raise Exception(f"Search input error: {e}")
 
     debug_sleep("search_sleep")
+    dropdown_items = frame.locator(SLICER_ITEM_SELECTOR)
 
-    # Wait for slicer to show the hospital name in visible items
-    frame.wait_for_selector(
-        f'{SLICER_ITEM_SELECTOR} span.slicerText:text("{hospital}")',
-        timeout=10000
-    )
+    try:
+        frame.wait_for_selector(f"{SLICER_ITEM_SELECTOR} span.slicerText", state="visible", timeout=10000)
+        count = dropdown_items.count()
+        if count == 0:
+            raise Exception("Dropdown items failed to load.")
+    except Exception as e:
+        raise Exception(f"Dropdown wait error: {e}")
 
-    # Click the container (not just the text span)
-    frame.locator(SLICER_ITEM_SELECTOR).nth(0).click()
+    found = False
+    count = dropdown_items.count()
+    for i in range(count):
+        item = dropdown_items.nth(i)
+        try:
+            text = item.locator("span.slicerText").inner_text().strip()
+            if normalize_text(text) == normalize_text(hospital):
+                item.click()
+                found = True
+                break
+        except Exception:
+            continue
+
+    if not found:
+        for i in range(count):
+            item = dropdown_items.nth(i)
+            try:
+                text = item.locator("span.slicerText").inner_text().strip()
+                if text == hospital:
+                    item.click()
+                    found = True
+                    break
+            except Exception:
+                continue
+
+    if not found:
+        if ENABLE_SCREENSHOT:
+            screenshot_path = os.path.join(screenshot_dir, f"{screenshot_counter:03d}.png")
+            frame.page.screenshot(path=screenshot_path, full_page=True)
+        raise Exception(f"No exact match found for '{hospital}' in dropdown")
+
     debug_sleep("visual_update_sleep")
 
     try:
