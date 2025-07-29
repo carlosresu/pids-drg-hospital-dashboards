@@ -12,7 +12,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ---------------- Configuration ----------------
 POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiOTI0MWRlZDQtZTQ4OS00NjQyLWI1NTEtN2Y5NDZkOTc1ZGEzIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
+POWER_BI_URL = "https://app.powerbi.com/view?r=eyJrIjoiOTI0MWRlZDQtZTQ4OS00NjQyLWI1NTEtN2Y5NDZkOTc1ZGEzIiwidCI6ImM4MzU0YWFmLWVjYzUtNGZmNy05NTkwLWRmYzRmN2MxZjM2MSIsImMiOjEwfQ%3D%3D"
 WAIT_TIMES = {
+    "iframe_wait": 3,
+    "dropdown_sleep": 3,
+    "search_sleep": 3,
+    "visual_update_sleep": 3
     "iframe_wait": 3,
     "dropdown_sleep": 3,
     "search_sleep": 3,
@@ -23,24 +28,39 @@ SEARCH_BAR_SELECTOR = "input.searchInput"
 SLICER_ITEM_SELECTOR = "div.slicerItemContainer"
 IFRAME_SELECTOR = "iframe[src*='powerbi']"
 HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
+HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
 TO_DEBUG = False
 ENABLE_SCREENSHOT = False
-NUM_WORKERS = 16
+NUM_WORKERS = 4
 # ------------------------------------------------
 
 def ensure_dependencies():
-    try:
-        import playwright
-    except ImportError:
-        print("Installing Playwright via pip...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+    import importlib.util
 
-    lockfile = os.path.join(os.path.expanduser("~"), ".playwright_installed")
+    def is_module_installed(module_name):
+        return importlib.util.find_spec(module_name) is not None
+
+    # Step 1: Ensure Playwright is installed
+    if not is_module_installed("playwright"):
+        print("[Dependencies] Installing Playwright via pip...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"[Error] Failed to install Playwright: {e}")
+
+    # Step 2: Ensure browser binaries are installed (idempotent)
+    lockfile = os.path.join(os.path.expanduser("~"), ".playwright_installed_chromium")
     if not os.path.exists(lockfile):
-        print("Installing Playwright browser binaries...")
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        with open(lockfile, "w") as f:
-            f.write("installed")
+        print("[Dependencies] Installing Chromium for Playwright...")
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            with open(lockfile, "w") as f:
+                f.write("chromium_installed")
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"[Error] Failed to install Chromium browser: {e}")
+    else:
+        print("[Dependencies] Chromium already installed. Skipping.")
 
 def debug_sleep(name):
     time.sleep(WAIT_TIMES[name])
@@ -52,16 +72,9 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
     if TO_DEBUG:
         print(f"Selecting: {hospital}")
 
-    for attempt in range(2):  # Retry once if dropdown fails
-        try:
-            frame.click(DROPDOWN_SELECTOR, timeout=15000)
-            frame.wait_for_selector(SEARCH_BAR_SELECTOR, state="visible", timeout=10000)
-            debug_sleep("dropdown_sleep")
-            break
-        except Exception as e:
-            if attempt == 1:
-                raise Exception(f"Failed to open dropdown: {e}")
-            debug_sleep("dropdown_sleep")
+    # Open the dropdown
+    frame.click(DROPDOWN_SELECTOR, timeout=15000)
+    debug_sleep("dropdown_sleep")
 
     try:
         search_box = frame.locator(SEARCH_BAR_SELECTOR)
@@ -73,48 +86,14 @@ def select_first_search_result(frame, hospital, screenshot_dir, screenshot_count
 
     debug_sleep("search_sleep")
 
-    dropdown_items = frame.locator(SLICER_ITEM_SELECTOR)
+    # Wait for slicer to show the hospital name in visible items
+    frame.wait_for_selector(
+        f'{SLICER_ITEM_SELECTOR} span.slicerText:text("{hospital}")',
+        timeout=10000
+    )
 
-    try:
-        frame.wait_for_selector(f"{SLICER_ITEM_SELECTOR} span.slicerText", state="visible", timeout=10000)
-        count = dropdown_items.count()
-        if count == 0:
-            raise Exception("Dropdown items failed to load.")
-    except Exception as e:
-        raise Exception(f"Dropdown wait error: {e}")
-
-    found = False
-    count = dropdown_items.count()
-
-    for i in range(count):
-        item = dropdown_items.nth(i)
-        try:
-            text = item.locator("span.slicerText").inner_text().strip()
-            if normalize_text(text) == normalize_text(hospital):
-                item.click()
-                found = True
-                break
-        except Exception:
-            continue
-
-    if not found:
-        for i in range(count):
-            item = dropdown_items.nth(i)
-            try:
-                text = item.locator("span.slicerText").inner_text().strip()
-                if text == hospital:
-                    item.click()
-                    found = True
-                    break
-            except Exception:
-                continue
-
-    if not found:
-        if ENABLE_SCREENSHOT:
-            screenshot_path = os.path.join(screenshot_dir, f"{screenshot_counter:03d}.png")
-            frame.page.screenshot(path=screenshot_path, full_page=True)
-        raise Exception(f"No exact match found for '{hospital}' in dropdown")
-
+    # Click the container (not just the text span)
+    frame.locator(SLICER_ITEM_SELECTOR).nth(0).click()
     debug_sleep("visual_update_sleep")
 
     try:
