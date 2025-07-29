@@ -4,7 +4,6 @@ import sys
 import csv
 import time
 import math
-import json
 import subprocess
 import unicodedata
 from datetime import datetime
