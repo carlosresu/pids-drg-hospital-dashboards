@@ -25,7 +25,7 @@ IFRAME_SELECTOR = "iframe[src*='powerbi']"
 HOSPITALS_CSV = os.path.join("data", "inputs", "failed_hospitals.csv")
 TO_DEBUG = False
 ENABLE_SCREENSHOT = False
-NUM_WORKERS = 16
+NUM_WORKERS = 4
 # ------------------------------------------------
 
 def ensure_dependencies():
