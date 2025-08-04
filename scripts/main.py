@@ -177,6 +177,7 @@ def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp):
         print(f"[Worker {worker_id}] Starting with {len(hospitals_subset)} hospital(s).")
     failed = []
     screenshot_counter = 1
+    date_for_filename = run_timestamp.split("_")[0]  # YYYYMMDD only
 
     try:
         with sync_playwright() as p:
@@ -201,7 +202,7 @@ def worker_task(hospitals_subset, output_dir, worker_id, run_timestamp):
                     screenshot_counter += 1
 
                     safe_name = re.sub(r"[\\/*?:\"<>|]", "_", hospital)
-                    pdf_name = f"SB_Report_{run_timestamp}_{safe_name}.pdf"
+                    pdf_name = f"SB_Report_{date_for_filename}_{safe_name}.pdf"
                     pdf_path = os.path.join(output_dir, pdf_name)
 
                     if ENABLE_SCREENSHOT:
