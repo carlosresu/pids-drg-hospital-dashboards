@@ -30,7 +30,9 @@ project-root/
 │   └── outputs/
 │       └── SB_Report_<TIMESTAMP>/   # PDF reports generated per run
 │
-├── exporter.py                      # Main script (this file)
+│
+├── scripts/
+│   └── exporter.py                  # Main script
 └── README.md                        # Documentation
 ```
 
