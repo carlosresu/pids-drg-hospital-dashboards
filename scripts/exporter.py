@@ -235,7 +235,7 @@ if __name__ == "__main__":
 
     ensure_dependencies()  # Check and install dependencies if needed
 
-    base_input_csv = os.path.join("data", "inputs", "hospitals_new.csv")
+    base_input_csv = os.path.join("data", "inputs", "hospitals.csv")
     failed_input_csv = os.path.join("data", "inputs", "failed_hospitals.csv")
 
     attempt = 1

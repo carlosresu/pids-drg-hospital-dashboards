@@ -25,7 +25,7 @@ project-root/
 │
 ├── data/
 │   ├── inputs/
-│   │   ├── hospitals_new.csv        # Main hospital list (input)
+│   │   ├── hospitals.csv        # Main hospital list (input)
 │   │   └── failed_hospitals.csv     # Retry list (auto-generated)
 │   └── outputs/
 │       └── SB_Report_<TIMESTAMP>/   # PDF reports generated per run
@@ -63,7 +63,7 @@ project-root/
    Place a CSV at:
 
    ```
-   data/inputs/hospitals_new.csv
+   data/inputs/hospitals.csv
    ```
 
    with at least one column:
@@ -87,7 +87,7 @@ python exporter.py
 
 ### Workflow
 
-1. Script reads hospitals from `hospitals_new.csv`
+1. Script reads hospitals from `hospitals.csv`
 2. Each hospital name is:
 
    - searched in the Power BI dropdown
@@ -184,7 +184,7 @@ data/outputs/SB_Report_20250919_143015/
 
 - If some hospitals repeatedly fail, check:
 
-  - The exact spelling of names in `hospitals_new.csv`
+  - The exact spelling of names in `hospitals.csv`
   - That they appear in the Power BI dropdown
 
 - You can manually edit `failed_hospitals.csv` and rerun.
