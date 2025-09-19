@@ -1,7 +1,0 @@
-{
-  "iframe_wait": 5,
-  "dropdown_sleep": 15,
-  "search_sleep": 10,
-  "visual_update_sleep": 15,
-  "webdriver_wait_first_result": 15
-}
