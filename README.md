@@ -1,7 +1,34 @@
-# 📄 Automated Hospital PDF Exporter (Power BI + Playwright)
+# pids-drg-hospital-dashboards
+
+## 📄 Automated Hospital PDF Exporter (Power BI + Playwright)
 
 This project automates the export of **hospital-specific PDF reports** from a Power BI dashboard.
 It uses [Playwright](https://playwright.dev/python/) for headless browser automation, supports **parallel workers** via `ProcessPoolExecutor`, and includes robust **retry logic** for failed hospitals.
+
+**Last Updated:** December 2025
+
+---
+
+## Progress Since June 2025
+
+### Key Accomplishments
+
+| Date | Milestone |
+|------|-----------|
+| **Jun 2025** | Initial commit with basic PDF export functionality |
+| **Jul 2025** | Added cross-platform support (Windows/Mac) using Playwright |
+| **Aug 2025** | Implemented parallel processing with configurable workers |
+| **Sep 2025** | Added exact matching fallback, refactored into v2 script |
+| **Oct 2025** | Prepared for walkthrough, restructured folder layout |
+| **Nov 2025** | Wrote comprehensive `walkthrough.md` with step-by-step guide |
+| **Dec 2025** | Updated hospital list handling, improved retry mechanism |
+
+### Current Status
+
+- **Working exporter:** Successfully exports 1,800+ hospital PDFs
+- **Cross-platform:** Tested on Windows and macOS
+- **Parallel workers:** Default 4 workers with retry logic
+- **Output format:** Timestamped directories with individual hospital PDFs
 
 ---
 
